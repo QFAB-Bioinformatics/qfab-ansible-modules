@@ -81,7 +81,7 @@ options:
         description:
             - "':' separated list of paths to search for 'brew' executable. Since A package (I(formula) in linuxbrew parlance) location is prefixed relative to the actual path of I(brew) command, providing an alternative I(brew) path enables managing different set of packages in an alternative location in the system."
         required: false
-        default: '/home/linuxbrew/.linuxbrew/bin/brew'
+        default: '/home/linuxbrew/.linuxbrew/bin'
     state:
         description:
             - state of the package
@@ -923,7 +923,7 @@ def main():
                 type='list'
             ),
             path=dict(
-                default="/usr/local/bin",
+                default="/home/linuxbrew/.linuxbrew/bin",
                 required=False,
                 type='path',
             ),
