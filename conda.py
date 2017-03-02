@@ -13,6 +13,9 @@
 # Conda path is assumed to get consistent with GVL by default:
 #   /mnt/gvl/apps/anaconda_ete/bin
 #
+# Minimum version of Conda supported is 4.3 due to changes in
+# conda command flags and return structure (mainly 'conda info')
+#
 # More information:
 # QFAB: http://qfab.org/
 # GVL:  https://www.gvl.org.au/
@@ -33,7 +36,7 @@ author:
    - "Thom Cuddihy (@thom88)"
 requirements:
    - "python >= 2.6"
-   - conda
+   - "conda >= 4.3"
 short_description: Package manager for Conda
 description:
     - Manages Conda packages
@@ -120,6 +123,12 @@ def _create_regex_group(s):
 
 class Conda(object):
     '''A class to manage Conda packages.'''
+
+    #region constants
+    CONDA_MAJOR_VERSION = 4
+    CONDA_MINOR_VERSION = 3
+
+    #endregion
 
     #region regex
     VALID_PATH_CHARS = r'''
@@ -363,14 +372,14 @@ class Conda(object):
 
     #endregion
 
-    def __init__(self, module, packages, versions, path, state,
-                 channels, install_options, update_conda, upgrade_all):
+    def __init__(self, module, packages, versions, path, state, channels,
+                 environment, install_options, update_conda, upgrade_all):
         if not install_options:
             install_options = list()
         self._setup_status_vars()
         self._setup_instance_vars(module=module, packages=packages, versions=versions,
                                   path=path, state=state, channels=channels,
-                                  install_options=install_options,
+                                  environment=environment, install_options=install_options,
                                   update_conda=update_conda, upgrade_all=upgrade_all )
         self._prep()
 
@@ -407,7 +416,25 @@ class Conda(object):
             self.message = 'Unable to locate conda executable.'
             raise CondaException('Unable to locate conda executable.')
 
-        return self.conda_path
+        cmd = [
+            "{conda_path}".format(conda_path=self.conda_path),
+            "info",
+        ]
+        rc, out, err = self.module.run_command(cmd)
+        conda_return = out.split(' ')
+        if not conda_return[1] == "conda":
+            self.failed = True
+            self.message = 'Unexpected return during conda check'
+            raise CondaException('Unexpected return during conda check')
+        conda_version = conda_return[2].split('.')
+        if conda_version[1] >= self.CONDA_MAJOR_VERSION:
+            if conda_version[2] >= self.CONDA_MINOR_VERSION:
+                self.update_only = False
+                return self.conda_path
+        else:
+            self.update_only = True
+            return self.conda_path
+
 
     def _status(self):
         return (self.failed, self.changed, self.message)
@@ -416,13 +443,25 @@ class Conda(object):
     #region checks
 
     def _current_package_is_installed(self):
-        return True
+        if not self.valid_package(self.current_package):
+            self.failed = True
+            self.message = 'Invalid package: {0}.'.format(self.current_package)
+            raise CondaException(self.message)
 
-    def _current_package_is_activated(self):
-        return True
+        cmd = [
+            "{conda_path}".format(conda_path=self.conda_path),
+            "list -f -v",
+            self.current_package,
+            "--json",
+        ]
+        rc, out, err = self.module.run_command(cmd)
+        for line in out.split('\n'):
 
-    def _check_installed(module, conda, name):
-        return True
+            if '"version":' in line:
+                name = '"' + self.current_version + '"'
+                if name in line:
+                    return True
+        return False
 
     #endregion
 
@@ -451,6 +490,8 @@ class Conda(object):
     
     #region bulk commands
     def _install_packages(self):
+        for package in self.packages:
+            self.current_package = package
         return True
     
     def _upgrade_packages(self):
@@ -463,9 +504,21 @@ class Conda(object):
     #region conda commands
 
     def _update_conda(self):
+
+        """
+        conda update conda
+        :return:
+        """
         return True
 
     def _upgrade_all(self):
+        """
+        conda update --all
+        NOTE: should be used with an environment
+        ALSO NOTE: takes dependencies into account!
+        Will only upgrade a package if all resolve
+        :return:
+        """
         return True
 
     #endregion
@@ -488,6 +541,12 @@ class Conda(object):
         return (failed, changed, message)
 
     def _run(self):
+
+        if self.update_only and not self.update_conda:
+            self.failed = True
+            self.message = 'Unsupported conda version. Please update first.'
+            raise CondaException('Unsupported conda version. Please update first.')
+
         if self.update_conda:
             self._update_conda()
 
@@ -540,6 +599,11 @@ def main():
                     aliases=["channel"],
                     type='list',
                 ),
+                environment=dict(
+                    default=None,
+                    aliases=["env", "venv"],
+                    type='list',
+                ),
                 install_options=dict(
                     default=None,
                     aliases=['options'],
@@ -586,6 +650,7 @@ def main():
         state = 'absent'
 
     channels = p['channels']
+    environment = p['environment']
 
     p['install_options'] = p['install_options'] or []
     install_options = ['--{0}'.format(install_option)
@@ -595,8 +660,9 @@ def main():
     upgrade_all = p['upgrade_all']
 
     conda = Conda(module=module, packages=packages, versions=versions,path=path,
-                  state=state, channels=channels, install_options=install_options,
-                  update_conda=update_conda, upgrade_all=upgrade_all, )
+                  state=state, channels=channels, environment=environment,
+                  install_options=install_options, update_conda=update_conda,
+                  upgrade_all=upgrade_all, )
 
     (failed, changed, message) = conda.run()
     if failed:
