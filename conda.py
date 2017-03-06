@@ -5,16 +5,15 @@
 #
 # (c) 2017, Thom Cuddihy <t.cuddihy@qfab.org>
 #
-# Ansible module to easily deploy a versioned tool environment using Conda
+# Ansible module to easily deploy a versioned tool environments using Conda
 # to bioinformatics linux servers (originally Genomics Virtual Labs).
 #
 # NOTE: this DOES include versioning of dependencies too :)
 #
-# Conda path is assumed to get consistent with GVL by default:
+# Conda path is assumed to be consistent with GVL by default:
 #   /mnt/gvl/apps/anaconda_ete/bin
 #
-# Minimum version of Conda supported is 4.3 due to changes in
-# conda command flags and return structure (mainly 'conda info')
+# Minimum tested version of Conda is 4.0.11
 #
 # More information:
 # QFAB: http://qfab.org/
@@ -29,6 +28,8 @@ ANSIBLE_METADATA = {'status': ['preview'],
                     'version': '1.0'}
 
 # TODO: Make sure that option aliases are consistent!
+# TODO: Too many iterations; do this at the end! ~tink
+
 DOCUMENTATION = """
 ---
 module: conda
@@ -36,75 +37,15 @@ author:
    - "Thom Cuddihy (@thom88)"
 requirements:
    - "python >= 2.6"
-   - "conda >= 4.3"
+   - "conda >= 4.0.11"
 short_description: Package manager for Conda
 description:
     - Manages Conda packages
 options:
-    name:
-        description:
-            - name of package to install/remove
-        required: false
-        default: None
-        aliases: ['pkg', 'package', 'formula']
-    version:
-        description:
-            - version of module
-        required: false
-        default: None
-        aliases: ['ver', 'vers']
-    state:
-        description:
-            - state of the package
-        choices: [ 'head', 'latest', 'present', 'absent', 'linked', 'unlinked' ]
-        required: false
-        default: present
-    channels:
-        description:
-            - additional Conda channels to use
-        required: false
-        default: None
-        aliases: ['channel']
-    environment:
-        description:
-            - the Conda environment to address, either new or existing
-        required: false
-        default: None
-        aliases: ['env', 'venv']
-    path:
-        description:
-            - "':' separated list of paths to search for 'conda' executable.
-        required: false
-        default: '/mnt/gvl/apps/anaconda_ete/bin'
-    install_options:
-        description:
-            - options flags to use to install a package
-        required: false
-        default: null
-        aliases: ['options']
-    update_conda:
-        description:
-            - bool whether to update the Conda installation
-        required: false
-        default: false
-    upgrade_all:
-        description:
-            - bool whether to upgrade all installed packages to latest version
-        required: false
-        default: false
 """
 
 EXAMPLES = """
-# Install tool 'foo'
-- conda:
-    name: foo
-    state: present
-
-# Install 'foo' version 1.3
-- conda:
-    name: foo
-    vers: 1.3
-    state: present
+    See options comment above :)
 """
 
 import os.path
@@ -126,7 +67,8 @@ class Conda(object):
 
     #region constants
     CONDA_MAJOR_VERSION = 4
-    CONDA_MINOR_VERSION = 3
+    CONDA_MINOR_VERSION = 0
+    CONDA_TERT_VERSION = 11
 
     #endregion
 
@@ -140,10 +82,8 @@ class Conda(object):
             -                   # dashes
         '''.format(sep=os.path.sep)
 
-    VALID_CONDA_PATH_CHARS = r'''
+    VALID_ENV_CHARS = r'''
             \w                  # alphanumeric characters (i.e., [a-zA-Z0-9_])
-            \s                  # spaces
-            {sep}               # the OS-specific path separator
             .                   # dots
             -                   # dashes
         '''.format(sep=os.path.sep)
@@ -151,33 +91,19 @@ class Conda(object):
     VALID_PACKAGE_CHARS = r'''
             \w                  # alphanumeric characters (i.e., [a-zA-Z0-9_])
             .                   # dots
-            /                   # slash (for taps)
-            \+                  # plusses
+            =                   # version equals
             -                   # dashes
-            :                   # colons (for URLs)
         '''
 
     INVALID_PATH_REGEX = _create_regex_group(VALID_PATH_CHARS)
-    INVALID_CONDA_PATH_REGEX = _create_regex_group(VALID_CONDA_PATH_CHARS)
+    INVALID_ENV_REGEX = _create_regex_group(VALID_ENV_CHARS)
     INVALID_PACKAGE_REGEX = _create_regex_group(VALID_PACKAGE_CHARS)
 
     #endregion
 
-    #region  class validation
+    #region class validation
     @classmethod
     def valid_path(cls, path):
-        '''
-        `path` must be one of:
-         - list of paths
-         - a string containing only:
-             - alphanumeric characters
-             - dashes
-             - dots
-             - spaces
-             - colons
-             - os.path.sep
-        '''
-
         if isinstance(path, basestring):
             return not cls.INVALID_PATH_REGEX.search(path)
 
@@ -187,78 +113,27 @@ class Conda(object):
             return False
         else:
             paths = path
-            return all(cls.valid_conda_path(path_) for path_ in paths)
-
-    @classmethod
-    def valid_conda_path(cls, conda_path):
-        '''
-        `conda_path` must be one of:
-         - None
-         - a string containing only:
-             - alphanumeric characters
-             - dashes
-             - dots
-             - spaces
-             - os.path.sep
-        '''
-
-        if conda_path is None:
+            for path_ in paths:
+                if cls.INVALID_PATH_REGEX.search(path_):
+                    return False
             return True
 
+    @classmethod
+    def valid_environment(cls, name):
         return (
-            isinstance(conda_path, basestring)
-            and not cls.INVALID_CONDA_PATH_REGEX.search(conda_path)
+            isinstance(name, basestring)
+            and not cls.INVALID_ENV_REGEX.search(name)
         )
 
     @classmethod
     def valid_package(cls, package):
-        '''A valid package is either None or alphanumeric.'''
-
-        if package is None:
-            return True
-
         return (
             isinstance(package, basestring)
             and not cls.INVALID_PACKAGE_REGEX.search(package)
         )
 
     @classmethod
-    def valid_version(cls, version):
-        '''A valid version is either None or alphanumeric.'''
-
-        if version is None:
-            return True
-
-        return (
-            isinstance(version, basestring)
-            and not cls.INVALID_CONDA_PATH_REGEX.search(version)
-        )
-
-    @classmethod
-    def valid_recipe(cls, recipe):
-        '''A valid version is either None or alphanumeric + URL chars.'''
-
-        if recipe is None:
-            return True
-
-        return (
-            isinstance(recipe, basestring)
-            and not cls.INVALID_PACKAGE_REGEX.search(recipe)
-        )
-
-    @classmethod
     def valid_state(cls, state):
-        '''
-        A valid state is one of:
-            - None
-            - present
-            - installed
-            - latest
-            - absent
-            - removed
-            - uninstalled
-        '''
-
         if state is None:
             return True
         else:
@@ -266,18 +141,13 @@ class Conda(object):
                 isinstance(state, basestring)
                 and state.lower() in (
                     'present',
-                    'installed',
-                    'latest',
                     'absent',
-                    'removed',
-                    'uninstalled'
+                    'remove_env',
                 )
             )
 
     @classmethod
     def valid_module(cls, module):
-        '''A valid module is an instance of AnsibleModule.'''
-
         return isinstance(module, AnsibleModule)
 
     #endregion
@@ -315,72 +185,36 @@ class Conda(object):
             else:
                 self._path = path
 
-    @property
-    def conda_path(self):
-        return self._conda_path
-
-    @conda_path.setter
-    def conda_path(self, conda_path):
-        if not self.valid_conda_path(conda_path):
-            self._conda_path = None
-            self.failed = True
-            self.message = 'Invalid conda_path: {0}.'.format(conda_path)
-            raise CondaException(self.message)
-
-        else:
-            self._conda_path = conda_path
-
-    @property
-    def params(self):
-        return self._params
-
-    @params.setter
-    def params(self, params):
-        self._params = self.module.params
-
-    @property
-    def current_package(self):
-        return self._current_package
-
-    @current_package.setter
-    def current_package(self, package):
-        if not self.valid_package(package):
-            self._current_package = None
-            self.failed = True
-            self.message = 'Invalid package: {0}.'.format(package)
-            raise CondaException(self.message)
-
-        else:
-            self._current_package = package
-
     # nasty direct property declarations to remove warning message
+    # TODO rework to include validation in setters and use private vars
+    @property
+    def environment(self):
+        return self.environment
     @property
     def state(self):
         return self.state
-
-    @property
-    def packages(self):
-        return self.packages
 
     @property
     def update_conda(self):
         return self.update_conda
 
     @property
-    def upgrade_all(self):
-        return self.upgrade_all
+    def channels(self):
+        return self.channels
+
+    @property
+    def packages(self):
+        return self.packages
 
     #endregion
 
-    def __init__(self, module, packages, versions, path, state, channels,
-                 environment, install_options, update_conda, upgrade_all):
-        if not install_options:
-            install_options = list()
+    def __init__(self, module, environment, path, state, channels,
+                 packages, update_conda):
+
         self._setup_status_vars()
-        self._setup_instance_vars(module=module, packages=packages, versions=versions,
-                                  path=path, state=state, channels=channels,
-                                  environment=environment, install_options=install_options,
-                                  update_conda=update_conda, upgrade_all=upgrade_all )
+        self._setup_instance_vars(module=module, environment=environment, path=path,
+                                  state=state, channels=channels, packages=packages,
+                                  update_conda=update_conda)
         self._prep()
 
     #region prep
@@ -427,14 +261,19 @@ class Conda(object):
             self.message = 'Unexpected return during conda check'
             raise CondaException('Unexpected return during conda check')
         conda_version = conda_return[2].split('.')
-        if conda_version[1] >= self.CONDA_MAJOR_VERSION:
-            if conda_version[2] >= self.CONDA_MINOR_VERSION:
-                self.update_only = False
-                return self.conda_path
-        else:
-            self.update_only = True
-            return self.conda_path
 
+        # this is... probably the worse code I've ever written
+        # TODO: fix this monstrosity
+        self.update_only = False
+        if conda_version[1] < self.CONDA_MAJOR_VERSION:
+            self.update_only = True
+        elif conda_version[1] == self.CONDA_MAJOR_VERSION:
+            if conda_version[2] < self.CONDA_MINOR_VERSION:
+                self.update_only = True
+            elif conda_version[2] == self.CONDA_MINOR_VERSION:
+                if conda_version[3] && (conda_version[3] < self.CONDA_TERT_VERSION):
+                    self.update_only = True
+        return self.conda_path
 
     def _status(self):
         return (self.failed, self.changed, self.message)
@@ -442,84 +281,204 @@ class Conda(object):
 
     #region checks
 
-    def _current_package_is_installed(self):
-        if not self.valid_package(self.current_package):
+    def _environment_exists(self):
+        if not self.valid_environment(self.environment):
             self.failed = True
-            self.message = 'Invalid package: {0}.'.format(self.current_package)
+            self.message = 'Invalid environment name: {0}'.format(self.environment)
             raise CondaException(self.message)
 
         cmd = [
             "{conda_path}".format(conda_path=self.conda_path),
-            "list -f -v",
-            self.current_package,
-            "--json",
+            "env list | awk '{print $1}'",
         ]
         rc, out, err = self.module.run_command(cmd)
-        for line in out.split('\n'):
+        if rc == 0:
+            for line in out.split('\n'):
+               if self.environment == line:
+                   return True
+            return False
+        else:
+            self.failed = True
+            self.message = err.strip()
+            raise CondaException(self.message)
 
-            if '"version":' in line:
-                name = '"' + self.current_version + '"'
-                if name in line:
-                    return True
-        return False
+    def _check_packages(self):
+        bad_packages = []
+        for package in self.packages:
+            if not self.valid_package(package):
+                self.failed = True
+                bad_packages.append(package)
+        if self.failed:
+            self.message = 'Invalid packages: {0}'.format(bad_packages)
+            raise CondaException(self.message)
+        return True
 
+    # TODO add check for individual package that calls `conda search` e.g.
+    def _check_package(self):
+        return True
     #endregion
 
     #region append commands
+    def _add_channels_to_command(self, command):
+        if self.channels:
+            channels = self.channels.strip().split()
+            all_channels = []
+            for channel in channels:
+                all_channels.append('--channel')
+                all_channels.append(channel)
 
-    def _add_channels_to_command(command, channels):
-        return True
+            return command[:2] + all_channels + command[2:]
+        else:
+            return command
 
-    def _add_extras_to_command(command, extras):
-        return True
-
-    #endregiob
-
-    #region individual commands
-
-    def _remove_package(module, conda, installed, name):
-        return True
-
-    def _install_package(module, conda, installed, name, version, installed_version):
-        return True
-
-    def _update_package(module, conda, installed, name):
-        return True
+    # TODO: refactor conda calls to actually use this again :)
+    def _add_environment_to_command(self, command):
+        if self.environment:
+            env = []
+            env.append("--name")
+            env.append(self.environment)
+            return command[:2] + env + command[2:]
+        else:
+            return command
 
     #endregion
-    
+
     #region bulk commands
     def _install_packages(self):
+        cmd = ([
+            self.conda_path,
+        ])
+        new_env = False
+        if self.environment:
+            if self._environment_exists():
+                cmd.append([
+                    "install",
+                    "-y",
+                    "-n ",
+                    self.environment,
+                ])
+            else:
+                new_env = True
+                cmd.append([
+                    "create",
+                    "-y",
+                    "-n",
+                    self.environment,
+                ])
         for package in self.packages:
-            self.current_package = package
-        return True
+            cmd.append(package)
+        cmd = self._add_channels_to_command(cmd)
+        rc, out, err = self.module.run_command(cmd)
+        if rc == 0:
+            if out and isinstance(out, basestring):
+                already_updated = any(
+                    re.search(r'All requested packages already installed', s.strip(), re.IGNORECASE)
+                    for s in out.split('\n')
+                    if s
+                )
+                if not already_updated:
+                    self.changed = True
+                    if new_env:
+                        self.message = 'Conda environment created successfully.'
+                        self.changed_count += 1
+                    else:
+                        self.message = 'Conda environment updated successfully'
+                        self.changed_count += 1
+                else:
+                    self.message = 'Conda environment already set up'
+                    self.unchanged_count += 1
+            return True
+        else:
+            self.failed = True
+            self.message = err.strip()
+            raise CondaException(self.message)
     
-    def _upgrade_packages(self):
-        return True
-    
+
     def _uninstall_packages(self):
-        return True
+        if self.environment:
+            if self._environment_exists():
+                cmd = ([
+                    self.conda_path,
+                    "remove",
+                    "-y",
+                    "-n",
+                    self.environment,
+                ])
+                rc, out, err = self.module.run_command(cmd)
+                if rc == 0:
+                    self.changed = True
+                    self.message = 'Conda packages successfully removed from environment'
+                    self.changed_count += 1
+                else: # TODO add check for packages already uninstall rather than just any error
+                    self.failed = True
+                    self.message = err.strip()
+                    raise CondaException(self.message)
+            else:
+                #self.failed = True # _is_ this a fail?
+                self.message = "Environment not found"
+                self.unchanged_count += 1
+        else:
+            self.failed = True
+            self.message = "No environment passed to remove packages from"
+            raise CondaException(self.message)
     #endregion
 
     #region conda commands
 
     def _update_conda(self):
+        cmd = ([
+            self.conda_path,
+            'update -y -n root conda',
+        ])
+        cmd = self._add_environment_to_command(cmd)
+        rc, out, err = self.module.run_command(cmd)
+        if rc == 0:
+            if out and isinstance(out, basestring):
+                already_updated = any(
+                    re.search(r'All requested packages already installed', s.strip(), re.IGNORECASE)
+                    for s in out.split('\n')
+                    if s
+                )
+                if not already_updated:
+                    self.changed = True
+                    self.message = 'Conda updated successfully.'
+                    self.changed_count += 1
+                else:
+                    self.message = 'Conda already up-to-date.'
+                    self.unchanged_count += 1
+        else:
+            self.failed = True
+            self.message = err.strip()
+            raise CondaException(self.message)
 
-        """
-        conda update conda
-        :return:
-        """
-        return True
+    def _remove_environment(self):
+        if self.environment:
+            if self._environment_exists():
+                cmd = ([
+                    self.conda_path,
+                    "remove",
+                    "-y",
+                    "-n",
+                    self.environment,
+                ])
 
-    def _upgrade_all(self):
-        """
-        conda update --all
-        NOTE: should be used with an environment
-        ALSO NOTE: takes dependencies into account!
-        Will only upgrade a package if all resolve
-        :return:
-        """
-        return True
+                rc, out, err = self.module.run_command(cmd)
+                if rc == 0:
+                    self.changed = True
+                    self.message = 'Conda environment successfully removed'
+                    self.changed_count += 1
+                else:
+                    self.failed = True
+                    self.message = err.strip()
+                    raise CondaException(self.message)
+            else:
+                #self.failed = True # _is_ this a fail?
+                self.message = "Environment for removal not found"
+                self.unchanged_count += 1
+        else:
+            self.failed = True
+            self.message = "No environment passed for removal"
+            raise CondaException(self.message)
 
     #endregion
 
@@ -550,22 +509,14 @@ class Conda(object):
         if self.update_conda:
             self._update_conda()
 
-        if self.upgrade_all:
-            self._upgrade_all()
-
         if self.packages:
             if self.state == "present":
                 return self._install_packages()
-            elif self.state == 'installed':
-                return self._install_packages()
-            elif self.state == 'latest':
-                return self._upgrade_packages()
             elif self.state == 'absent':
                 return self._uninstall_packages()
-            elif self.state == 'removed':
-                return self._uninstall_packages()
-            elif self.state == 'uninstalled':
-                return self._uninstall_packages()
+            elif self.state == 'remove_env':
+                return self._remove_environment()
+
     #endregion
 
 #region main setup
@@ -573,14 +524,8 @@ def main():
     module = AnsibleModule(
             argument_spec=dict(
                 name=dict(
-                    aliases=["pkg", "package"],
-                    required=True,
-                    type='list',
-                ),
-                version=dict(
-                    aliases=["ver", "vers"],
                     required=False,
-                    type='list'
+                    type='str',
                 ),
                 path=dict(
                     default="/mnt/gvl/apps/anaconda_ete/bin",
@@ -589,35 +534,23 @@ def main():
                 ),
                 state=dict(
                     default="present",
-                    choices=[
-                        "present", "installed", "latest",
-                        "absent", "removed", "uninstalled",
-                    ],
+                    choices=["present", "absent",
+                             "remove_env"],
                 ),
                 channels=dict(
                     default=None,
                     aliases=["channel"],
                     type='list',
                 ),
-                environment=dict(
+                dependencies=dict(
                     default=None,
-                    aliases=["env", "venv"],
-                    type='list',
-                ),
-                install_options=dict(
-                    default=None,
-                    aliases=['options'],
+                    aliases=["packages"],
                     type='list',
                 ),
                 update_conda=dict(
                     default=False,
                     type='bool',
                 ),
-                upgrade_all=dict(
-                    default=False,
-                    aliases=["upgrade"],
-                    type='bool',
-                )
             ),
             supports_check_mode=True,
         )
@@ -625,44 +558,29 @@ def main():
     p = module.params
 
     if p['name']:
-        packages = p['name']
+        environment = p['name']
     else:
-        packages = None
-
-    versions = p['version']
+        environment = None
 
     path = p['path']
     if path:
         path = path.split(':')
 
     state = p['state']
-    if state in ('present', 'installed'):
-        state = 'installed'
-    if state in ('head',):
-        state = 'head'
-    if state in ('latest', 'upgraded'):
-        state = 'upgraded'
-    if state == 'linked':
-        state = 'linked'
-    if state == 'unlinked':
-        state = 'unlinked'
-    if state in ('absent', 'removed', 'uninstalled'):
+    if state in ('present'):
+        state = 'present'
+    if state in ('absent'):
         state = 'absent'
+    if state in ('remove_env',):
+        state = 'remove_env'
 
     channels = p['channels']
-    environment = p['environment']
-
-    p['install_options'] = p['install_options'] or []
-    install_options = ['--{0}'.format(install_option)
-                       for install_option in p['install_options']]
+    packages = p['dependencies']
 
     update_conda = p['update_conda']
-    upgrade_all = p['upgrade_all']
 
-    conda = Conda(module=module, packages=packages, versions=versions,path=path,
-                  state=state, channels=channels, environment=environment,
-                  install_options=install_options, update_conda=update_conda,
-                  upgrade_all=upgrade_all, )
+    conda = Conda(module=module, environment=environment, path=path, state=state,
+                  channels=channels,packages=packages, update_conda=update_conda,)
 
     (failed, changed, message) = conda.run()
     if failed:
