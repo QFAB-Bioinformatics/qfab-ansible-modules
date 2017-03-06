@@ -185,26 +185,26 @@ class Conda(object):
             else:
                 self._path = path
 
-    # nasty direct property declarations to remove warning message
-    # TODO rework to include validation in setters and use private vars
-    @property
-    def environment(self):
-        return self.environment
-    @property
-    def state(self):
-        return self.state
+    # # nasty direct property declarations to remove warning message
+    # # TODO rework to include validation in setters and use private vars
+    # @property
+    # def state(self):
+    #     return self.state
+    #
+    # @property
+    # def update_conda(self):
+    #     return self.update_conda
+    #
+    # @property
+    # def channels(self):
+    #     return self.channels
+    #
+    # @property
+    # def packages(self):
+    #     return self.packages
 
-    @property
-    def update_conda(self):
-        return self.update_conda
 
-    @property
-    def channels(self):
-        return self.channels
 
-    @property
-    def packages(self):
-        return self.packages
 
     #endregion
 
@@ -265,14 +265,14 @@ class Conda(object):
         # this is... probably the worse code I've ever written
         # TODO: fix this monstrosity
         self.update_only = False
-        if conda_version[1] < self.CONDA_MAJOR_VERSION:
-            self.update_only = True
-        elif conda_version[1] == self.CONDA_MAJOR_VERSION:
-            if conda_version[2] < self.CONDA_MINOR_VERSION:
-                self.update_only = True
-            elif conda_version[2] == self.CONDA_MINOR_VERSION:
-                if conda_version[3] && (conda_version[3] < self.CONDA_TERT_VERSION):
-                    self.update_only = True
+        # if conda_version[1] < self.CONDA_MAJOR_VERSION:
+        #     self.update_only = True
+        # elif conda_version[1] == self.CONDA_MAJOR_VERSION:
+        #     if conda_version[2] < self.CONDA_MINOR_VERSION:
+        #         self.update_only = True
+        #     elif conda_version[2] == self.CONDA_MINOR_VERSION:
+        #         if conda_version[3] && (conda_version[3] < self.CONDA_TERT_VERSION):
+        #             self.update_only = True
         return self.conda_path
 
     def _status(self):
@@ -288,14 +288,19 @@ class Conda(object):
             raise CondaException(self.message)
 
         cmd = [
-            "{conda_path}".format(conda_path=self.conda_path),
-            "env list | awk '{print $1}'",
+            self.conda_path,
+            "env",
+            "list",
         ]
         rc, out, err = self.module.run_command(cmd)
         if rc == 0:
             for line in out.split('\n'):
-               if self.environment == line:
-                   return True
+                cols = line.split()
+                try:
+                    if self.environment == cols[0]:
+                        return True
+                except IndexError:
+                    pass
             return False
         else:
             self.failed = True
@@ -321,9 +326,8 @@ class Conda(object):
     #region append commands
     def _add_channels_to_command(self, command):
         if self.channels:
-            channels = self.channels.strip().split()
             all_channels = []
-            for channel in channels:
+            for channel in self.channels:
                 all_channels.append('--channel')
                 all_channels.append(channel)
 
@@ -351,23 +355,19 @@ class Conda(object):
         new_env = False
         if self.environment:
             if self._environment_exists():
-                cmd.append([
-                    "install",
-                    "-y",
-                    "-n ",
-                    self.environment,
-                ])
+                cmd.append("install")
             else:
                 new_env = True
-                cmd.append([
-                    "create",
-                    "-y",
-                    "-n",
-                    self.environment,
-                ])
+                cmd.append("create")
+            cmd.append("--yes")
+            cmd.append("--name")
+            cmd.append(self.environment)
         for package in self.packages:
             cmd.append(package)
         cmd = self._add_channels_to_command(cmd)
+
+
+
         rc, out, err = self.module.run_command(cmd)
         if rc == 0:
             if out and isinstance(out, basestring):
@@ -400,10 +400,12 @@ class Conda(object):
                 cmd = ([
                     self.conda_path,
                     "remove",
-                    "-y",
-                    "-n",
+                    "--yes",
+                    "--name",
                     self.environment,
                 ])
+                for package in self.packages:
+                    cmd.append(package)
                 rc, out, err = self.module.run_command(cmd)
                 if rc == 0:
                     self.changed = True
@@ -428,7 +430,11 @@ class Conda(object):
     def _update_conda(self):
         cmd = ([
             self.conda_path,
-            'update -y -n root conda',
+            "update",
+            "-y",
+            "-n",
+            "root",
+            "conda",
         ])
         cmd = self._add_environment_to_command(cmd)
         rc, out, err = self.module.run_command(cmd)
@@ -456,9 +462,10 @@ class Conda(object):
             if self._environment_exists():
                 cmd = ([
                     self.conda_path,
+                    "env",
                     "remove",
-                    "-y",
-                    "-n",
+                    "--yes",
+                    "--name",
                     self.environment,
                 ])
 
@@ -509,13 +516,14 @@ class Conda(object):
         if self.update_conda:
             self._update_conda()
 
+        if self.state == 'remove_env':
+            return self._remove_environment()
+
         if self.packages:
             if self.state == "present":
                 return self._install_packages()
             elif self.state == 'absent':
                 return self._uninstall_packages()
-            elif self.state == 'remove_env':
-                return self._remove_environment()
 
     #endregion
 
@@ -539,6 +547,7 @@ def main():
                 ),
                 channels=dict(
                     default=None,
+                    required=False,
                     aliases=["channel"],
                     type='list',
                 ),
@@ -555,29 +564,28 @@ def main():
             supports_check_mode=True,
         )
 
-    p = module.params
-
-    if p['name']:
-        environment = p['name']
+    if module.params.get('name'):
+        environment = module.params.get('name')
     else:
         environment = None
 
-    path = p['path']
+    path = module.params.get('path')
     if path:
         path = path.split(':')
 
-    state = p['state']
+    state = module.params.get('state')
     if state in ('present'):
         state = 'present'
     if state in ('absent'):
         state = 'absent'
-    if state in ('remove_env',):
+    if state in ('remove_env'):
         state = 'remove_env'
 
-    channels = p['channels']
-    packages = p['dependencies']
+    channels = module.params.get('channels')
 
-    update_conda = p['update_conda']
+    packages = module.params.get('dependencies')
+
+    update_conda = module.params.get('update_conda')
 
     conda = Conda(module=module, environment=environment, path=path, state=state,
                   channels=channels,packages=packages, update_conda=update_conda,)
