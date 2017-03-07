@@ -366,33 +366,49 @@ class Conda(object):
             cmd.append(package)
         cmd = self._add_channels_to_command(cmd)
 
+        # retry three times in case of connection reset by peer for large environment installs
+        max_tries = 3
+        tries = 0
+        while tries < max_tries:
+            tries += 1
 
-
-        rc, out, err = self.module.run_command(cmd)
-        if rc == 0:
-            if out and isinstance(out, basestring):
-                already_updated = any(
-                    re.search(r'All requested packages already installed', s.strip(), re.IGNORECASE)
+            rc, out, err = self.module.run_command(cmd)
+            if rc == 0:
+                if out and isinstance(out, basestring):
+                    already_setup = any(
+                        re.search(r'All requested packages already installed', s.strip(), re.IGNORECASE)
+                        for s in out.split('\n')
+                        if s
+                    )
+                    if not already_setup:
+                        self.changed = True
+                        if new_env:
+                            self.message = 'Conda environment created successfully.'
+                            self.changed_count += 1
+                        else:
+                            self.message = 'Conda environment updated successfully'
+                            self.changed_count += 1
+                    else:
+                        self.message = 'Conda environment already set up'
+                        self.unchanged_count += 1
+                return True
+            elif out and isinstance(out, basestring):
+                conn_reset = any(
+                    re.search(r'Connection reset by peer', s.strip(), re.IGNORECASE)
                     for s in out.split('\n')
                     if s
                 )
-                if not already_updated:
-                    self.changed = True
-                    if new_env:
-                        self.message = 'Conda environment created successfully.'
-                        self.changed_count += 1
-                    else:
-                        self.message = 'Conda environment updated successfully'
-                        self.changed_count += 1
+                if conn_reset and tries < max_tries:
+                    continue
                 else:
-                    self.message = 'Conda environment already set up'
-                    self.unchanged_count += 1
-            return True
-        else:
-            self.failed = True
-            self.message = err.strip()
-            raise CondaException(self.message)
-    
+                    self.failed = True
+                    self.message = err.strip()
+                    raise CondaException(self.message)
+            else:
+                self.failed = True
+                self.message = err.strip()
+                raise CondaException(self.message)
+
 
     def _uninstall_packages(self):
         if self.environment:
